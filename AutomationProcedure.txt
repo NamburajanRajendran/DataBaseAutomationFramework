@@ -1,0 +1,79 @@
+create or replace  PROCEDURE AUTOMATED_DATALOAD_TEST_VALIDATION(p_error_message out varchar2)
+IS
+TYPE QUERY_RESULT_TYPE IS RECORD  (FLAG VARCHAR2(5),COUNT NUMBER);
+TYPE RETURN_VALUES_TAB IS TABLE OF QUERY_RESULT_TYPE;
+CURSOR  CUR_ELIGIBLE_TESTCASE IS
+ SELECT  test_case_id,  test_case_name,  test_case_description,  passed_description,
+ failed_description,  test_script,  is_tc_enabled,  test_group,  updated_by FROM  testcase_dataload WHERE IS_TC_ENABLED='Y';
+RETURN_VALUES RETURN_VALUES_TAB;
+V_SQL_STMT CLOB;
+V_PROCESSING_DATE TIMESTAMP:= CURRENT_TIMESTAMP;
+V_TEST_STATUS VARCHAR2(5);
+V_TEST_CASE_ID NUMBER;
+V_ACTUAL_DESCRIPTION VARCHAR2(5000);
+
+BEGIN
+ DELETE FROM testcase_dataload_log where TRUNC(processing_date)=TRUNC(V_PROCESSING_DATE);
+
+ FOR REC IN CUR_ELIGIBLE_TESTCASE
+ LOOP
+    V_SQL_STMT:=REC.test_script;
+    v_test_case_id:=REC.test_case_id;
+    V_TEST_STATUS:=NULL;
+    BEGIN
+        EXECUTE IMMEDIATE V_SQL_STMT BULK COLLECT INTO RETURN_VALUES;
+    
+    IF RETURN_VALUES.COUNT>1 THEN 
+        V_TEST_STATUS:='FAIL';
+    ELSE 
+        IF   RETURN_VALUES.COUNT=0 THEN
+                    V_TEST_STATUS:='PASS';
+        ELSE
+            IF  UPPER(RETURN_VALUES(1).FLAG)='FALSE' THEN
+                    V_TEST_STATUS:='FAIL';
+        ELSE 
+            IF  UPPER(RETURN_VALUES(1).FLAG)='TRUE' THEN
+                    V_TEST_STATUS:='PASS';
+                ELSE
+                    V_TEST_STATUS:=NULL;
+                END IF;
+            END IF;
+        END IF;
+    END IF;
+    EXCEPTION
+        WHEN OTHERS THEN             
+            DBMS_OUTPUT.PUT_LINE('Error code ' || SQLCODE || ': ' || SUBSTR(SQLERRM, 1 , 64));
+            V_TEST_STATUS:='ERROR';
+            V_ACTUAL_DESCRIPTION:= 'Error code ' || SQLCODE || ': ' || SUBSTR(SQLERRM, 1 , 64);
+    END;
+INSERT INTO testcase_dataload_log
+    (PROCESSING_DATE,                     
+TEST_CASE_ID,                      
+TEST_CASE_NAME,  
+EXPECTED_RESULT, 
+ACTUAL_RESULT,   
+TEST_STATUS,    
+TEST_GROUP,       
+UPDATED_BY,     
+UPDATE_ON     
+)
+    VALUES
+    (V_PROCESSING_DATE,
+    v_test_case_id,
+    REC.test_case_name,
+    REC.passed_description,
+    DECODE(V_TEST_STATUS,'PASS',REC.passed_description,
+                         'FAIL',REC.failed_description,V_ACTUAL_DESCRIPTION),
+    V_TEST_STATUS,
+    REC.test_group,
+    REC.updated_by,
+    SYSDATE);
+
+ END LOOP;
+ EXCEPTION
+        WHEN OTHERS THEN
+            p_error_message:= 'Error code ' || SQLCODE || ': ' || SUBSTR(SQLERRM, 1 , 64);
+            ROLLBACK;
+ COMMIT;
+ 
+ END;
